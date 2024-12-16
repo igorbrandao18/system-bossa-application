@@ -1,0 +1,17 @@
+{
+  "fullToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiZW1haWwiOiJhZG1pbkBleGFtcGxlLmNvbSIsIm5hbWUiOiJBZG1pbiBVc2VyIiwicm9sZSI6IkFETUlOIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  "parts": {
+    "header": {
+      "alg": "HS256",
+      "typ": "JWT"
+    },
+    "payload": {
+      "sub": "1",
+      "email": "admin@example.com",
+      "name": "Admin User",
+      "role": "ADMIN",
+      "iat": 1516239022
+    },
+    "signature": "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+  }
+}
