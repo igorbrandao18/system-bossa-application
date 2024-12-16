@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { UsersService } from './users.service';
 import { User, UserRole } from './entities/user.entity';
@@ -7,45 +8,75 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import * as bcrypt from 'bcrypt';
 
-describe('UsersService', () => {
+describe('UsersService (Integration)', () => {
   let service: UsersService;
   let repository: Repository<User>;
+  let module: TestingModule;
+  let testUser: User;
 
-  const mockUser: User = {
-    id: '1',
-    name: 'Test User',
-    email: 'test@example.com',
-    password: 'hashedPassword123',
-    phone: '+5511999999999',
-    role: UserRole.USER,
-    isActive: true,
-    lastLogin: new Date(),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-
-  const mockRepository = {
-    create: jest.fn(),
-    save: jest.fn(),
-    find: jest.fn(),
-    findOne: jest.fn(),
-    update: jest.fn(),
-    remove: jest.fn(),
-  };
-
-  beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        UsersService,
-        {
-          provide: getRepositoryToken(User),
-          useValue: mockRepository,
-        },
+  beforeAll(async () => {
+    module = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+        }),
+        TypeOrmModule.forRootAsync({
+          imports: [ConfigModule],
+          useFactory: (configService: ConfigService) => ({
+            type: 'postgres',
+            host: configService.get('DB_HOST'),
+            port: configService.get('DB_PORT'),
+            username: configService.get('DB_USERNAME'),
+            password: configService.get('DB_PASSWORD'),
+            database: configService.get('DB_DATABASE'),
+            entities: [User],
+            synchronize: true,
+          }),
+          inject: [ConfigService],
+        }),
+        TypeOrmModule.forFeature([User]),
       ],
+      providers: [UsersService],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
-    repository = module.get<Repository<User>>(getRepositoryToken(User));
+    repository = module.get<Repository<User>>('UserRepository');
+
+    // Limpar todos os usuários antes dos testes
+    try {
+      const users = await repository.find();
+      await Promise.all(users.map(user => repository.remove(user)));
+    } catch (error) {
+      console.log('Error cleaning up users:', error);
+    }
+  });
+
+  beforeEach(async () => {
+    // Criar usuário de teste com email único
+    const timestamp = new Date().getTime();
+    const createUserDto: CreateUserDto = {
+      name: 'Test User',
+      email: `test${timestamp}@example.com`,
+      password: 'test123',
+      phone: '+5511999999999',
+    };
+
+    testUser = await service.create(createUserDto);
+  });
+
+  afterEach(async () => {
+    // Limpar usuário de teste após cada teste
+    if (testUser) {
+      try {
+        await repository.remove(testUser);
+      } catch (error) {
+        console.log('Error removing test user:', error);
+      }
+    }
+  });
+
+  afterAll(async () => {
+    await module.close();
   });
 
   it('should be defined', () => {
@@ -54,35 +85,30 @@ describe('UsersService', () => {
 
   describe('create', () => {
     it('should create a new user successfully', async () => {
+      const timestamp = new Date().getTime();
       const createUserDto: CreateUserDto = {
-        name: 'Test User',
-        email: 'test@example.com',
-        password: 'password123',
+        name: 'New User',
+        email: `newuser${timestamp}@example.com`,
+        password: 'test123',
         phone: '+5511999999999',
-        role: UserRole.USER,
-        isActive: true,
       };
 
-      jest.spyOn(bcrypt, 'hash').mockImplementation(() => Promise.resolve('hashedPassword123'));
-      mockRepository.findOne.mockResolvedValue(null);
-      mockRepository.create.mockReturnValue(mockUser);
-      mockRepository.save.mockResolvedValue(mockUser);
-
       const result = await service.create(createUserDto);
-      expect(result).toEqual(mockUser);
-      expect(mockRepository.create).toHaveBeenCalled();
-      expect(mockRepository.save).toHaveBeenCalled();
+      expect(result).toBeDefined();
+      expect(result.email).toBe(createUserDto.email);
+      
+      // Limpar usuário criado
+      await repository.remove(result);
     });
 
     it('should throw ConflictException when email already exists', async () => {
+      // Usar o mesmo email do usuário de teste criado em beforeEach
       const createUserDto: CreateUserDto = {
         name: 'Test User',
-        email: 'existing@example.com',
-        password: 'password123',
+        email: testUser.email, // Usar o email do usuário que já existe
+        password: 'test123',
         phone: '+5511999999999',
       };
-
-      mockRepository.findOne.mockResolvedValue(mockUser);
 
       await expect(service.create(createUserDto)).rejects.toThrow('Email already exists');
     });
@@ -90,44 +116,30 @@ describe('UsersService', () => {
 
   describe('findAll', () => {
     it('should return an array of users', async () => {
-      const mockUsers = [mockUser];
-      mockRepository.find.mockResolvedValue(mockUsers);
-
       const result = await service.findAll();
-      expect(result).toEqual(mockUsers);
-      expect(mockRepository.find).toHaveBeenCalled();
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBeGreaterThan(0);
     });
   });
 
   describe('findOne', () => {
     it('should return a user by id', async () => {
-      mockRepository.findOne.mockResolvedValue(mockUser);
-
-      const result = await service.findOne('1');
-      expect(result).toEqual(mockUser);
-      expect(mockRepository.findOne).toHaveBeenCalledWith({
-        where: { id: '1' },
-        select: ['id', 'name', 'email', 'phone', 'role', 'isActive', 'lastLogin', 'createdAt'],
-      });
+      const result = await service.findOne(testUser.id);
+      expect(result).toBeDefined();
+      expect(result.id).toBe(testUser.id);
     });
 
     it('should throw NotFoundException when user is not found', async () => {
-      mockRepository.findOne.mockResolvedValue(null);
-
-      await expect(service.findOne('999')).rejects.toThrow('User not found');
+      const nonExistentId = '00000000-0000-0000-0000-000000000000';
+      await expect(service.findOne(nonExistentId)).rejects.toThrow('User not found');
     });
   });
 
   describe('findByEmail', () => {
     it('should return a user by email', async () => {
-      mockRepository.findOne.mockResolvedValue(mockUser);
-
-      const result = await service.findByEmail('test@example.com');
-      expect(result).toEqual(mockUser);
-      expect(mockRepository.findOne).toHaveBeenCalledWith({
-        where: { email: 'test@example.com' },
-        select: ['id', 'email', 'password', 'name', 'role'],
-      });
+      const result = await service.findByEmail(testUser.email);
+      expect(result).toBeDefined();
+      expect(result.email).toBe(testUser.email);
     });
   });
 
@@ -137,50 +149,46 @@ describe('UsersService', () => {
         name: 'Updated Name',
       };
 
-      mockRepository.findOne.mockResolvedValue(mockUser);
-      mockRepository.save.mockResolvedValue({ ...mockUser, ...updateUserDto });
-
-      const result = await service.update('1', updateUserDto);
-      expect(result).toEqual({ ...mockUser, ...updateUserDto });
-      expect(mockRepository.save).toHaveBeenCalled();
+      const result = await service.update(testUser.id, updateUserDto);
+      expect(result.name).toBe(updateUserDto.name);
     });
 
-    it('should hash password when updating password', async () => {
+    it('should update password successfully', async () => {
       const updateUserDto: UpdateUserDto = {
-        password: 'newPassword123',
+        password: 'newpassword123',
       };
 
-      jest.spyOn(bcrypt, 'hash').mockImplementation(() => Promise.resolve('newHashedPassword123'));
-      mockRepository.findOne.mockResolvedValue(mockUser);
-      mockRepository.save.mockResolvedValue({ ...mockUser, password: 'newHashedPassword123' });
-
-      await service.update('1', updateUserDto);
-      expect(bcrypt.hash).toHaveBeenCalledWith('newPassword123', 10);
+      const result = await service.update(testUser.id, updateUserDto);
+      expect(result).toBeDefined();
+      
+      // Verificar se o novo password funciona
+      const updatedUser = await service.findByEmail(testUser.email);
+      const isValidPassword = await bcrypt.compare('newpassword123', updatedUser.password);
+      expect(isValidPassword).toBe(true);
     });
   });
 
   describe('remove', () => {
     it('should remove a user successfully', async () => {
-      mockRepository.findOne.mockResolvedValue(mockUser);
-      mockRepository.remove.mockResolvedValue(mockUser);
-
-      await service.remove('1');
-      expect(mockRepository.remove).toHaveBeenCalledWith(mockUser);
+      await service.remove(testUser.id);
+      await expect(service.findOne(testUser.id)).rejects.toThrow('User not found');
+      testUser = null; // Prevent afterEach from trying to delete again
     });
 
     it('should throw NotFoundException when trying to remove non-existent user', async () => {
-      mockRepository.findOne.mockResolvedValue(null);
-
-      await expect(service.remove('999')).rejects.toThrow('User not found');
+      const nonExistentId = '00000000-0000-0000-0000-000000000000';
+      await expect(service.remove(nonExistentId)).rejects.toThrow('User not found');
     });
   });
 
   describe('updateLastLogin', () => {
     it('should update user last login timestamp', async () => {
-      await service.updateLastLogin('1');
-      expect(mockRepository.update).toHaveBeenCalledWith('1', {
-        lastLogin: expect.any(Date),
-      });
+      const beforeUpdate = new Date();
+      await service.updateLastLogin(testUser.id);
+      
+      const updatedUser = await service.findOne(testUser.id);
+      expect(updatedUser.lastLogin).toBeDefined();
+      expect(updatedUser.lastLogin.getTime()).toBeGreaterThanOrEqual(beforeUpdate.getTime());
     });
   });
 }); 
